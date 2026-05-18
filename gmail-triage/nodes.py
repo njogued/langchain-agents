@@ -31,8 +31,11 @@ def triage_router(state: State) -> Command:
             {"role": "user", "content": user_prompt}
         ]
     )
+
+    goto = "response_agent" if result.classification == "respond" else "__end__"
+
     return Command(
-        goto="__end__",
+        goto=goto,
         update={
             "classification": result.classification,
             "reasoning": result.reasoning,
