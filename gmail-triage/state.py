@@ -12,3 +12,4 @@ class State(MessagesState):
     email_input: EmailInput
     classification: Literal["ignore", "notify", "respond"] | None
     reasoning: str | None
+    draft_id: str | None
