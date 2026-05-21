@@ -22,6 +22,7 @@ router_llm = llm.with_structured_output(ClassificationOutput)
 def triage_router(state: State) -> Command:
     """Classify the email and route accordingly"""
     email = state["email_input"]
+    print(f"  [triage] Processing: {email['subject'][:50]}...") 
     user_prompt = f"""From: {email['from_addr']}
         Subject: {email['subject']}
         Body: {email['body']}"""
@@ -31,7 +32,7 @@ def triage_router(state: State) -> Command:
             {"role": "user", "content": user_prompt}
         ]
     )
-
+    print(f"  [triage] Result: {result.classification}") 
     goto = "response_agent" if result.classification == "respond" else "__end__"
 
     return Command(
