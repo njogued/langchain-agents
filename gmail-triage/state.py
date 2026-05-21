@@ -13,3 +13,4 @@ class State(MessagesState):
     classification: Literal["ignore", "notify", "respond"] | None
     reasoning: str | None
     draft_id: str | None
+    rework_count: int
