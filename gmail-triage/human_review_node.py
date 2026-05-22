@@ -1,10 +1,10 @@
-from langchain.types import interrupt, Command
-from langchain.graph.message import RemoveMessage
+from langgraph.types import interrupt, Command
+from langgraph.graph.message import RemoveMessage
 from state import State
 
 MAX_REWORKS = 2
 
-def human_review_node(state: State) -> Command:
+def human_review(state: State) -> Command:
     last = state["messages"][-1]
     args = last.tool_calls[0]["args"]
     rework_count = state.get("rework_count", 0)

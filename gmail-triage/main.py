@@ -6,6 +6,7 @@ load_dotenv()
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.types import Command
                                                                                                 
 from gmail_client import get_message, list_messages_by_label
 from graph import build_graph                                                                  
@@ -45,17 +46,28 @@ async def main():
             print(f"Found {len(stubs)} emails labeled '{LABEL}'\n")
                                                                                                 
             for stub in stubs:
-                email = get_message(stub["id"])                                                
-                                                                                            
+                email = get_message(stub["id"])
                 config = {"configurable": {"thread_id": email["message_id"]}}
                 result = await graph.ainvoke({"email_input": email}, config)
-                                                                                                
+
+                # If the graph paused at human_review, loop until the human approves
+                # (empty input) or we run out of resume rounds.
+                while "__interrupt__" in result:
+                    p = result["__interrupt__"][0].value
+                    attempt = p["rework_count"] + 1
+                    total   = p["max_reworks"] + 1
+                    print(f"\n--- Proposed draft (attempt {attempt}/{total}) ---")
+                    print(f"To:      {p['to']}")
+                    print(f"Subject: {p['subject']}")
+                    print(f"Body:\n{p['content']}\n")
+                    fb = input("Press enter to approve, or type revision instructions: ")
+                    result = await graph.ainvoke(Command(resume=fb), config)
                 print(f"From:           {email['from_addr']}")
-                print(f"Subject:        {email['subject']}")                                   
-                print(f"Classification: {result['classification']}")                         
+                print(f"Subject:        {email['subject']}")
+                print(f"Classification: {result['classification']}")
                 print(f"Reasoning:      {result['reasoning']}")
                 if result.get("draft_id"):
-                    print(f"Draft ID:       {result['draft_id']}")                             
+                    print(f"Draft ID:       {result['draft_id']}")
                 print("-" * 70)
                                                                                                 
                                                                                             
