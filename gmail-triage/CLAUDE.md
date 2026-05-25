@@ -9,27 +9,34 @@ LangGraph agent that pulls Gmail messages by label, classifies each one as `igno
 ## Graph flow
 
 ```
-START → triage_router → (respond?) → response_agent ⇄ tool_node → END
-                       → (ignore/notify?) → END
+START → triage_router → (respond?) → response_agent → human_review → tools → END
+                       → (ignore/notify?) → END                  ↘ (rework) → response_agent
+                                                                 ↘ (max reworks) → END
 ```
 
 - `triage_router` classifies and routes via `Command(goto=...)`
 - `response_agent` drafts replies using an LLM with MCP tools bound
-- `tool_node` (`ToolNode`) executes MCP tool calls (ReAct loop with `tools_condition`)
+- `human_review` interrupts the graph and waits for user approval/feedback before tools run
+- `tools` (`ToolNode`) executes MCP tool calls (only reached after human approval)
+
+The ReAct loop is gated on a human-in-the-loop checkpoint: after the LLM emits a `create_draft` tool call, `human_review` pauses execution via `interrupt()`, surfacing the proposed draft to the caller. The caller resumes with either empty input (approve → tools execute) or revision instructions (back to `response_agent` with feedback, up to `MAX_REWORKS = 2`).
 
 ## Module map
 
-- `main.py` — async entry point. Owns the MCP client lifecycle: spawns `gmail_mcp_server.py` via `stdio_client`, creates a `ClientSession`, loads tools with `load_mcp_tools(session)`, passes them to `build_graph(tools)`.
-- `graph.py` — `build_graph(tools)` builds a `StateGraph(State)` with three nodes (`triage_router`, `response_agent`, `tools`). Compiled with `InMemorySaver`. Takes MCP tools as a parameter.
+- `main.py` — async entry point. Owns the MCP client lifecycle: spawns `gmail_mcp_server.py` via `stdio_client`, creates a `ClientSession`, loads tools with `load_mcp_tools(session)`, passes them to `build_graph(tools)`. Per-email loop drives HITL: after each `graph.ainvoke`, while the result contains `__interrupt__`, prints the proposed draft and reads `input()` for approve/revise, then resumes with `Command(resume=fb)`.
+- `graph.py` — `build_graph(tools)` builds a `StateGraph(State)` with four nodes (`triage_router`, `response_agent`, `human_review`, `tools`). Compiled with `InMemorySaver`. Takes MCP tools as a parameter. `route_after_draft` sends the flow to `human_review` if the LLM emitted tool calls, otherwise to END.
 - `nodes.py` — `triage_router` calls `gpt-5-mini` via `init_chat_model` with `with_structured_output(ClassificationOutput)`. Returns `Command(goto="response_agent"|"__end__")` based on classification.
-- `response_node.py` — `make_response_agent(tools)` factory returns the `response_agent` node. Uses `bind_tools(tools)` for tool-calling. Passes message history on subsequent calls so the LLM sees tool results and stops the ReAct loop.
-- `state.py` — `EmailInput` TypedDict (`message_id`, `thread_id`, `subject`, `from_addr`, `body`) and `State(MessagesState)` adding `email_input`, `classification`, `reasoning`, `draft_id`.
-- `prompts.py` — `TRIAGE_SYSTEM` (classifier prompt, hard-codes Ed's three clients) and `RESPONSE_SYSTEM` (draft-writing prompt, references `create_draft` MCP tool).
+- `response_node.py` — `make_response_agent(tools)` factory returns the `response_agent` node. Uses `bind_tools(tools)` for tool-calling. **First call** seeds `state["messages"]` with both the email-context user prompt and the AI response, so the original email context persists across rework rounds. **Subsequent calls** (after tool execution or human feedback) pass the full message history through.
+- `human_review_node.py` — `human_review` reads the last message's tool call args, calls `interrupt()` with the proposed draft fields (`to`, `subject`, `content`, `rework_count`, `max_reworks`). On resume: empty feedback → `goto="tools"` (approve); non-empty feedback → `goto="response_agent"` with `RemoveMessage` clearing the prior draft + a new user message containing the feedback; `rework_count` past `MAX_REWORKS` (= 2) → `goto="__end__"`.
+- `state.py` — `EmailInput` TypedDict (`message_id`, `thread_id`, `subject`, `from_addr`, `body`, `rfc_message_id`, `references`) and `State(MessagesState)` adding `email_input`, `classification`, `reasoning`, `draft_id`, `rework_count`.
+- `prompts.py` — `TRIAGE_SYSTEM` (classifier prompt, hard-codes Ed's three clients) and `RESPONSE_SYSTEM` (draft-writing prompt; instructs the LLM to forward `thread_id`, `rfc_message_id`, and `references` unchanged so the draft threads on send).
 - `gmail_mcp_server.py` — FastMCP server wrapping `gmail_client.py`. Exposes three MCP tools: `list_messages`, `get_message`, `create_draft`. Runs on stdio transport.
-- `gmail_client.py` — Google API wrapper. `list_messages_by_label`, `get_message`, `create_email_draft`. OAuth flow uses `credentials.json` + `token.json` with scope `gmail.modify`.
+- `gmail_client.py` — Google API wrapper. `list_messages_by_label`, `get_message`, `create_email_draft`. `get_message` extracts the RFC `Message-ID` and `References` headers in addition to from/subject/body. `create_email_draft` sets `In-Reply-To` + `References` MIME headers on the draft (so it threads on send, not just in the Gmail UI) and forces a `Re:` subject prefix. OAuth flow uses `credentials.json` + `token.json` with scope `gmail.modify`.
 - `tools.py` — RETIRED. Old LangChain `@tool`s replaced by MCP tools. Still in directory but not imported.
 - `smoke_test.py` — minimal check that the Gmail client can list + fetch one message.
 - `MCP_INTEGRATION_NOTES.md` — full build log documenting the MCP integration, all challenges, and lessons learned.
+- `devnotes.md` — running log of challenges hit and how they were resolved (state-loss on rework, draft threading on send, etc.).
+- `wishlist.md` — nice-to-haves not committed to: quoted message body, signature injection, configurable LABEL/MAX_EMAILS.
 
 ## MCP architecture
 
@@ -75,6 +82,7 @@ First run triggers the OAuth browser flow and writes `token.json`.
 - `tools.py` is retired but not deleted.
 - No labeling action after triage (only drafting for `respond`).
 - `notify` classification doesn't trigger any notification mechanism.
+- Drafted replies don't include quoted original-message history or a signature (Gmail's compose UI normally adds these — see `wishlist.md`).
 
 ## Roadmap
 
@@ -88,21 +96,15 @@ Add automatic Gmail labeling after triage. Every email gets a label (`triage/ign
 
 Target graph:
 ```
-START → triage_router → label_node → (respond?) → response_agent ⇄ tool_node → END
+START → triage_router → label_node → (respond?) → response_agent → human_review → tools → END
                                     → (ignore/notify?) → END
 ```
 
-### Phase 2: Human-in-the-loop (HITL)
+### Phase 2: Human-in-the-loop (HITL) — DONE
 
-Add human approval before the agent takes action (drafting replies, applying labels).
+Implemented in `human_review_node.py`. The graph pauses via `interrupt()` after the LLM proposes a draft and waits for the caller (currently `main.py` via terminal `input()`) to approve or send revision instructions. Up to `MAX_REWORKS = 2` revisions allowed before the loop terminates.
 
-- Use LangGraph's `interrupt()` to pause the graph mid-execution
-- The agent presents its plan ("I want to draft this reply to Cynthia about X") and waits
-- The human approves, edits instructions, or skips
-- The graph resumes (or doesn't) based on the human's response
-- Placement: between `label_node` and `response_agent`
-
-LangGraph concept: `interrupt()` suspends graph execution and returns a value to the caller. The caller resumes with `graph.ainvoke(Command(resume=...))` passing the human's decision. The checkpointer preserves state across the pause.
+Key wrinkle solved: on rework, the email context must persist in `state["messages"]` or the LLM hallucinates / asks for the thread_id back. Fix in `response_node.py` is to write both the seed user prompt and the AI response into state on the first call. See `devnotes.md` #3.
 
 ### Phase 3: Memory (LangGraph Store)
 
