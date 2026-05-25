@@ -12,7 +12,7 @@ from gmail_client import get_message, list_messages_by_label
 from graph import build_graph                                                                  
                                                                                             
 LABEL = "0-Clients/client-cynthia"
-MAX_EMAILS = 5
+MAX_EMAILS = 2
 
                                                                                                 
 async def main():

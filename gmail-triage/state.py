@@ -7,6 +7,8 @@ class EmailInput(TypedDict):
     subject: str
     from_addr: str
     body: str
+    rfc_message_id: str
+    references: str
 
 class State(MessagesState):
     email_input: EmailInput

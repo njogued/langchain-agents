@@ -41,21 +41,28 @@ def make_response_agent(tools):
                 [{"role": "system", "content": RESPONSE_SYSTEM}]                               
                 + state["messages"]                                                            
             )                                                                                
-        else:                                                                                  
-            # First time here — seed with the email content.                                 
-            user_prompt = (                                                                    
+        else:
+            # First time here — seed with the email content.
+            user_prompt = (
                 f"Reply to this email.\n\n"
-                f"From: {email['from_addr']}\n"                                                
-                f"Subject: {email['subject']}\n"                                             
-                f"Thread ID: {email['thread_id']}\n\n"
-                f"{email['body']}"                                                             
+                f"From: {email['from_addr']}\n"
+                f"Subject: {email['subject']}\n"
+                f"Thread ID: {email['thread_id']}\n"
+                f"RFC Message-ID: {email.get('rfc_message_id', '')}\n"
+                f"References: {email.get('references', '')}\n\n"
+                f"{email['body']}"
             )
-            response = llm_with_tools.invoke(                                                  
-                [                                                                            
+            response = llm_with_tools.invoke(
+                [
                     {"role": "system", "content": RESPONSE_SYSTEM},
                     {"role": "user", "content": user_prompt},
-                ]                                                                              
-            )                                                                                   
-        print(f"  [respond] tool_calls: {bool(response.tool_calls)}")                        
+                ]
+            )
+            print(f"  [respond] tool_calls: {bool(response.tool_calls)}")
+            return {"messages": [
+                {"role": "user", "content": user_prompt},
+                response,
+            ]}
+        print(f"  [respond] tool_calls: {bool(response.tool_calls)}")
         return {"messages": [response]}
     return response_agent
