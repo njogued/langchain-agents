@@ -59,6 +59,8 @@ def get_message(message_id: str) -> dict:
         "from_addr": headers.get("from", ""),
         "subject": headers.get("subject", ""),
         "body": body,
+        "rfc_message_id": headers.get("message-id", ""),
+        "references": headers.get("references", ""),
     }
 
 def _extract_body(payload: dict) -> str:
@@ -79,12 +81,22 @@ def _extract_body(payload: dict) -> str:
 def _decode(data: str) -> str:
     return base64.urlsafe_b64decode(data.encode()).decode("utf-8", errors="replace")
 
-def create_email_draft(to: str, subject: str, content: str, thread_id: str) -> str:
+def create_email_draft(
+    to: str,
+    subject: str,
+    content: str,
+    thread_id: str,
+    rfc_message_id: str = "",
+    references: str = "",
+) -> str:
     """Create a Gmail draft as a reply to thread_id. Returns draft id."""
     service = _get_service()
     msg = MIMEText(content)
     msg["to"] = to
-    msg["subject"] = subject
+    msg["subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+    if rfc_message_id:
+        msg["In-Reply-To"] = rfc_message_id
+        msg["References"] = f"{references} {rfc_message_id}".strip()
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     draft = (
         service.users()

@@ -24,16 +24,29 @@ def get_message(message_id: str) -> dict:
 
 
 @mcp.tool()
-def create_draft(to: str, subject: str, content: str, thread_id: str) -> str:
+def create_draft(
+    to: str,
+    subject: str,
+    content: str,
+    thread_id: str,
+    rfc_message_id: str = "",
+    references: str = "",
+) -> str:
     """Create a Gmail draft reply in an existing thread.
     Args:
         to: Recipient email address.
         subject: Email subject line.
         content: Plain text body of the draft.
         thread_id: Gmail thread ID to attach this draft to.
+        rfc_message_id: RFC 2822 Message-ID of the email being replied to.
+            Required for proper threading when the draft is sent.
+        references: Existing References header from the original email.
+            Pass through unchanged; the client appends rfc_message_id.
     Returns the draft ID.
     """
-    return gmail_client.create_email_draft(to, subject, content, thread_id)
+    return gmail_client.create_email_draft(
+        to, subject, content, thread_id, rfc_message_id, references
+    )
 
 # This is the entry point. When run as `python gmail_mcp_server.py`,
 # FastMCP starts a stdio transport loop — it reads JSON-RPC requests
